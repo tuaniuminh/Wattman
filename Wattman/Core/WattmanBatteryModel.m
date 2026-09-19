@@ -1,5 +1,14 @@
 #import "WattmanBatteryModel.h"
 
+// Import Swift-generated header để gọi WattmanActivityManager
+// File này được tạo tự động bởi Swift compiler khi build
+#if __has_include("Wattman-Swift.h")
+#import "Wattman-Swift.h"
+#define WATTMAN_HAS_ACTIVITY_MANAGER 1
+#else
+#define WATTMAN_HAS_ACTIVITY_MANAGER 0
+#endif
+
 @interface WattmanBatteryModel () {
     WattmanMetrics _metrics;
 }
@@ -63,6 +72,36 @@
             if ([self.delegate respondsToSelector:@selector(batteryModelDidUpdateMetrics:)]) {
                 [self.delegate batteryModelDidUpdateMetrics:self->_metrics];
             }
+            
+#if WATTMAN_HAS_ACTIVITY_MANAGER
+            // Cập nhật hoặc bắt đầu Live Activity
+            WattmanActivityManager *mgr = [WattmanActivityManager shared];
+            if (mgr.isAvailable) {
+                // Tạo status text
+                NSString *status;
+                if (self->_metrics.current_ma > 30) {
+                    status = self->_metrics.wattage >= 15.0f ? @"⚡ Sạc nhanh USB-PD" : @"🔌 Đang nhận sạc";
+                } else if (self->_metrics.adapter_connected) {
+                    status = @"✅ Pin đầy / Bypass";
+                } else {
+                    status = @"🔋 Đang dùng pin";
+                }
+                
+                BOOL shouldBeActive = self->_metrics.adapter_connected || self->_metrics.is_charging;
+                
+                if (shouldBeActive) {
+                    [mgr startActivityWithWatts:self->_metrics.wattage
+                                     currentMa:(NSInteger)self->_metrics.current_ma
+                                     voltageMv:(NSUInteger)self->_metrics.voltage_mv
+                                batteryPercent:(NSInteger)self->_metrics.state_of_charge
+                                    isCharging:self->_metrics.is_charging
+                                 timeToFullMin:(NSInteger)self->_metrics.time_to_full_min
+                                    statusText:status];
+                } else {
+                    [mgr endActivity];
+                }
+            }
+#endif
         });
     }
 }

@@ -14,38 +14,21 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-24.04
+    runs-on: macos-14
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
       - name: Install build tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl xz-utils zip make ca-certificates imagemagick
-
-      - name: Setup iOS SDK and LLVM Toolchain
-        run: |
-          set -e
-          mkdir -p $HOME/theos/sdks $HOME/theos/toolchain
-          
-          # Download iOS 13.7 SDK
-          echo "[*] Downloading iPhoneOS13.7 SDK..."
-          curl -sL https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS13.7.sdk.tar.xz -o sdk.tar.xz
-          tar -xf sdk.tar.xz -C $HOME/theos/sdks
-          rm sdk.tar.xz
-
-          # Download iOS Cross-Toolchain (Clang + ldid)
-          echo "[*] Downloading iOS toolchain..."
-          curl -sL https://github.com/L1ghtmann/llvm-project/releases/download/main-update_3-eabca92/iOSToolchain-x86_64.tar.xz -o toolchain.tar.xz
-          tar -xf toolchain.tar.xz -C $HOME/theos/toolchain
-          rm toolchain.tar.xz
-
-          # Fix CGColor header compatibility in older SDKs if needed
-          header="$HOME/theos/sdks/iPhoneOS13.7.sdk/System/Library/Frameworks/CoreGraphics.framework/Headers/CGColor.h"
-          if [ -f "$header" ]; then
-            sed -i 's/) CG_UNAVAILABLE_EMBEDDED/, 2.0)/g' "$header" || true
-          fi
+          brew install ldid imagemagick zip || true
+          xcodebuild -version
+          swiftc --version
 
       - name: Generate App Icons (JPG → PNG, multi-size)
         run: |
@@ -54,29 +37,139 @@ jobs:
           RES="Wattman/Resources"
           if [ -f "$SRC" ]; then
             echo "[*] Converting AppIcon.jpg → PNG sizes..."
-            # iPhone @2x: 120×120, @3x: 180×180, Settings: 58×58, Spotlight: 80×80, Store: 1024×1024
-            convert "$SRC" -resize 120x120! "$RES/AppIcon@2x.png"
-            convert "$SRC" -resize 180x180! "$RES/AppIcon@3x.png"
-            convert "$SRC" -resize 58x58!   "$RES/AppIcon-Small@2x.png"
-            convert "$SRC" -resize 87x87!   "$RES/AppIcon-Small@3x.png"
-            convert "$SRC" -resize 80x80!   "$RES/AppIcon-Spotlight@2x.png"
-            convert "$SRC" -resize 120x120! "$RES/AppIcon-Spotlight@3x.png"
+            convert "$SRC" -resize 120x120!  "$RES/AppIcon@2x.png"
+            convert "$SRC" -resize 180x180!  "$RES/AppIcon@3x.png"
+            convert "$SRC" -resize 58x58!    "$RES/AppIcon-Small@2x.png"
+            convert "$SRC" -resize 87x87!    "$RES/AppIcon-Small@3x.png"
+            convert "$SRC" -resize 80x80!    "$RES/AppIcon-Spotlight@2x.png"
+            convert "$SRC" -resize 120x120!  "$RES/AppIcon-Spotlight@3x.png"
             convert "$SRC" -resize 1024x1024! "$RES/AppIcon-1024.png"
-            echo "[+] Icons generated successfully"
+            echo "[+] Icons generated"
           else
-            echo "[!] AppIcon.jpg not found, skipping icon generation"
+            echo "[!] AppIcon.jpg not found, skipping"
           fi
 
-      - name: Build Wattman IPA & TIPA
+      - name: Build Widget Extension (Swift)
         run: |
           set -e
-          export THEOS="$HOME/theos"
-          export PATH="$THEOS/toolchain/linux/iphone/bin:$PATH"
-          
-          echo "[*] Compiler version:"
-          $THEOS/toolchain/linux/iphone/bin/clang --version
-          
-          make -C Wattman all
+          SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "[*] SDK: $SDKROOT"
+          mkdir -p Wattman/build/obj
+
+          # Compile WattmanAttributes.swift (shared between widget and main app)
+          # Widget extension cần iOS 16.1+ cho Live Activities
+          swiftc \
+            -target arm64-apple-ios16.1 \
+            -sdk "$SDKROOT" \
+            -module-name WattmanWidget \
+            -framework WidgetKit \
+            -framework SwiftUI \
+            -framework ActivityKit \
+            -parse-as-library \
+            -Onone \
+            WattmanWidget/WattmanAttributes.swift \
+            WattmanWidget/WattmanLiveActivity.swift \
+            WattmanWidget/WattmanWidgetBundle.swift \
+            -emit-executable \
+            -o Wattman/build/WattmanWidget_bin
+
+          echo "[+] Widget extension compiled"
+
+      - name: Build Main App (ObjC + Swift bridge)
+        run: |
+          set -e
+          SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+          THEOS_CLANG=$(xcrun --sdk iphoneos --find clang)
+          THEOS_SWIFTC=$(xcrun --find swiftc)
+          DEPLOY_TARGET="16.1"
+          BUILD_DIR="Wattman/build"
+          OBJ_DIR="$BUILD_DIR/obj"
+          APP_DIR="$BUILD_DIR/Payload/Wattman.app"
+          PLUGINS_DIR="$APP_DIR/PlugIns/WattmanWidget.appex"
+
+          mkdir -p "$OBJ_DIR" "$APP_DIR" "$PLUGINS_DIR"
+
+          # ── Bước 1: Compile Swift bridge (WattmanActivityManager.swift) ──
+          echo "[*] Compiling Swift bridge..."
+          "$THEOS_SWIFTC" \
+            -target arm64-apple-ios$DEPLOY_TARGET \
+            -sdk "$SDKROOT" \
+            -module-name Wattman \
+            -framework ActivityKit \
+            -framework Foundation \
+            -import-objc-header Wattman/Wattman-Bridging-Header.h \
+            -emit-objc-header-path "$OBJ_DIR/Wattman-Swift.h" \
+            -emit-module -emit-module-path "$OBJ_DIR/Wattman.swiftmodule" \
+            -parse-as-library \
+            -Onone \
+            Wattman/Core/WattmanActivityManager.swift \
+            -c -o "$OBJ_DIR/WattmanActivityManager.o"
+
+          # ── Bước 2: Compile ObjC sources ────────────────────────────────
+          echo "[*] Compiling ObjC sources..."
+          CFLAGS="-target arm64-apple-ios$DEPLOY_TARGET \
+                  -fobjc-arc -fconstant-cfstrings \
+                  -Wno-deprecated-declarations -Wno-unused-variable \
+                  -O2 -isysroot $SDKROOT \
+                  -I Wattman -I $OBJ_DIR"
+
+          "$THEOS_CLANG" $CFLAGS -c Wattman/main.m            -o "$OBJ_DIR/main.o"
+          "$THEOS_CLANG" $CFLAGS -c Wattman/AppDelegate.m     -o "$OBJ_DIR/AppDelegate.o"
+          "$THEOS_CLANG" $CFLAGS -c Wattman/Core/WattmanSMC.c          -o "$OBJ_DIR/WattmanSMC.o"
+          "$THEOS_CLANG" $CFLAGS -c Wattman/Core/WattmanBatteryModel.m -o "$OBJ_DIR/WattmanBatteryModel.o"
+          "$THEOS_CLANG" $CFLAGS -c Wattman/UI/WattmanCardView.m        -o "$OBJ_DIR/WattmanCardView.o"
+          "$THEOS_CLANG" $CFLAGS -c Wattman/UI/WattmanViewController.m  -o "$OBJ_DIR/WattmanViewController.o"
+
+          # ── Bước 3: Link main binary ─────────────────────────────────────
+          echo "[*] Linking main binary..."
+          "$THEOS_CLANG" \
+            -target arm64-apple-ios$DEPLOY_TARGET \
+            -isysroot "$SDKROOT" \
+            -framework UIKit -framework Foundation -framework CoreGraphics \
+            -framework CoreFoundation -framework IOKit \
+            -framework ActivityKit \
+            -framework WidgetKit \
+            -lobjc -lswiftCore \
+            "$OBJ_DIR/main.o" "$OBJ_DIR/AppDelegate.o" \
+            "$OBJ_DIR/WattmanSMC.o" "$OBJ_DIR/WattmanBatteryModel.o" \
+            "$OBJ_DIR/WattmanCardView.o" "$OBJ_DIR/WattmanViewController.o" \
+            "$OBJ_DIR/WattmanActivityManager.o" \
+            -o "$APP_DIR/Wattman"
+
+          # ── Bước 4: Build Widget Extension binary ───────────────────────
+          echo "[*] Building WattmanWidget extension..."
+          "$THEOS_SWIFTC" \
+            -target arm64-apple-ios16.1 \
+            -sdk "$SDKROOT" \
+            -module-name WattmanWidget \
+            -framework WidgetKit -framework SwiftUI -framework ActivityKit \
+            -parse-as-library \
+            -Onone \
+            WattmanWidget/WattmanAttributes.swift \
+            WattmanWidget/WattmanLiveActivity.swift \
+            WattmanWidget/WattmanWidgetBundle.swift \
+            -emit-executable \
+            -o "$PLUGINS_DIR/WattmanWidget"
+
+          # ── Bước 5: Copy resources ───────────────────────────────────────
+          echo "[*] Copying resources..."
+          cp Wattman/Info.plist "$APP_DIR/Info.plist"
+          cp WattmanWidget/Info.plist "$PLUGINS_DIR/Info.plist"
+          for icon in Wattman/Resources/AppIcon*.png; do
+            [ -f "$icon" ] && cp "$icon" "$APP_DIR/$(basename $icon)" || true
+          done
+
+          # ── Bước 6: Sign với ldid ────────────────────────────────────────
+          echo "[*] Signing..."
+          ldid -S"Wattman/Wattman.entitlements" "$APP_DIR/Wattman"
+          ldid -S"WattmanWidget/WattmanWidget.entitlements" "$PLUGINS_DIR/WattmanWidget"
+
+          # ── Bước 7: Package IPA / TIPA ──────────────────────────────────
+          echo "[*] Packaging..."
+          cd "$BUILD_DIR"
+          zip -qry Wattman.ipa Payload
+          cp Wattman.ipa Wattman.tipa
+          echo "[+] Build complete!"
 
       - name: Upload Build Artifacts (.ipa and .tipa)
         uses: actions/upload-artifact@v4
@@ -95,7 +188,7 @@ jobs:
           files: |
             Wattman/build/Wattman.tipa
             Wattman/build/Wattman.ipa
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || 'Wattman v1.0.0 (TrollStore Release)' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || 'Wattman Latest' }}
           draft: false
           prerelease: false
