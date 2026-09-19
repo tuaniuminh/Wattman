@@ -35,10 +35,19 @@ typedef struct {
     uint16_t time_to_empty_min; // Ước tính thời gian còn lại (phút)
     
     // Nguồn sạc ngoài (External Power)
-    bool     is_charging;       // Thiết bị đang nhận sạc
-    bool     adapter_connected; // Có cắm củ sạc / cáp
-    char     adapter_desc[64];  // Mô tả nguồn sạc (USB-PD, Apple Adapter, MagSafe, etc.)
-    char     source_type[64];   // Nguồn dữ liệu (IOPMPowerSource / AppleSMC)
+    bool     is_charging;           // Thiết bị đang nhận sạc
+    bool     adapter_connected;     // Có cắm củ sạc / cáp
+    char     adapter_desc[64];      // Mô tả nguồn sạc (USB-PD, Apple Adapter, MagSafe, etc.)
+    char     adapter_name[48];      // Tên củ sạc (ví dụ: "Apple 20W USB-C Power Adapter")
+    char     adapter_manufacturer[32]; // Hãng sản xuất (ví dụ: "Apple")
+    uint16_t adapter_watts;         // Công suất định mức củ sạc (W)
+    uint16_t adapter_voltage_mv;    // Điện áp ngõ ra củ sạc (mV)
+    int32_t  adapter_current_ma;    // Dòng điện ngõ ra củ sạc (mA)
+    
+    // Thời gian ước tính
+    uint16_t time_to_full_min;      // Ước tính thời gian sạc đầy (phút), 0 nếu không xác định
+    
+    char     source_type[64];       // Nguồn dữ liệu (IOPMPowerSource / AppleSMC)
 } WattmanMetrics;
 
 // Khởi tạo và kiểm tra kết nối phần cứng

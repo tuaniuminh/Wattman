@@ -22,7 +22,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl xz-utils zip make ca-certificates
+          sudo apt-get install -y curl xz-utils zip make ca-certificates imagemagick
 
       - name: Setup iOS SDK and LLVM Toolchain
         run: |
@@ -45,6 +45,26 @@ jobs:
           header="$HOME/theos/sdks/iPhoneOS13.7.sdk/System/Library/Frameworks/CoreGraphics.framework/Headers/CGColor.h"
           if [ -f "$header" ]; then
             sed -i 's/) CG_UNAVAILABLE_EMBEDDED/, 2.0)/g' "$header" || true
+          fi
+
+      - name: Generate App Icons (JPG → PNG, multi-size)
+        run: |
+          set -e
+          SRC="Wattman/Resources/AppIcon.jpg"
+          RES="Wattman/Resources"
+          if [ -f "$SRC" ]; then
+            echo "[*] Converting AppIcon.jpg → PNG sizes..."
+            # iPhone @2x: 120×120, @3x: 180×180, Settings: 58×58, Spotlight: 80×80, Store: 1024×1024
+            convert "$SRC" -resize 120x120! "$RES/AppIcon@2x.png"
+            convert "$SRC" -resize 180x180! "$RES/AppIcon@3x.png"
+            convert "$SRC" -resize 58x58!   "$RES/AppIcon-Small@2x.png"
+            convert "$SRC" -resize 87x87!   "$RES/AppIcon-Small@3x.png"
+            convert "$SRC" -resize 80x80!   "$RES/AppIcon-Spotlight@2x.png"
+            convert "$SRC" -resize 120x120! "$RES/AppIcon-Spotlight@3x.png"
+            convert "$SRC" -resize 1024x1024! "$RES/AppIcon-1024.png"
+            echo "[+] Icons generated successfully"
+          else
+            echo "[!] AppIcon.jpg not found, skipping icon generation"
           fi
 
       - name: Build Wattman IPA & TIPA

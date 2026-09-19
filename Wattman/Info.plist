@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.2</string>
+	<string>1.0.3</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.2</string>
+	<string>1.0.3</string>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundlePrimaryIcon</key>
@@ -27,6 +27,13 @@
 			<key>CFBundleIconFiles</key>
 			<array>
 				<string>AppIcon</string>
+				<string>AppIcon@2x</string>
+				<string>AppIcon@3x</string>
+				<string>AppIcon-Small@2x</string>
+				<string>AppIcon-Small@3x</string>
+				<string>AppIcon-Spotlight@2x</string>
+				<string>AppIcon-Spotlight@3x</string>
+				<string>AppIcon-1024</string>
 			</array>
 			<key>UIPrerenderedIcon</key>
 			<false/>

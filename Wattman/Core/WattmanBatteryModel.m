@@ -146,6 +146,59 @@
     return @"IOKit (Phần cứng)";
 }
 
+- (NSString *)adapterDetailString {
+    // Hiển thị tên củ sạc và thông số điện
+    NSMutableString *detail = [NSMutableString string];
+    
+    if (_metrics.adapter_name[0] != '\0') {
+        [detail appendFormat:@"%s", _metrics.adapter_name];
+    }
+    
+    if (_metrics.adapter_voltage_mv > 0 && _metrics.adapter_current_ma > 0) {
+        float volt = (float)_metrics.adapter_voltage_mv / 1000.0f;
+        float curr = fabsf((float)_metrics.adapter_current_ma) / 1000.0f;
+        if (detail.length > 0) [detail appendString:@"\n"];
+        [detail appendFormat:@"%.1fV / %.2fA", volt, curr];
+        if (_metrics.adapter_watts > 0) {
+            [detail appendFormat:@" (%dW)", _metrics.adapter_watts];
+        }
+    } else if (_metrics.adapter_watts > 0) {
+        if (detail.length > 0) [detail appendString:@" "];
+        [detail appendFormat:@"(%dW)", _metrics.adapter_watts];
+    }
+    
+    if (detail.length == 0) {
+        // Fallback: dùng adapter_desc
+        if (_metrics.adapter_desc[0] != '\0') {
+            return [NSString stringWithUTF8String:_metrics.adapter_desc];
+        }
+        return _metrics.adapter_connected ? @"Đã kết nối" : @"Không có";
+    }
+    return [detail copy];
+}
+
+- (NSString *)timeToFullString {
+    if (_metrics.is_charging || _metrics.current_ma > 30) {
+        if (_metrics.time_to_full_min > 0) {
+            uint16_t h = _metrics.time_to_full_min / 60;
+            uint16_t m = _metrics.time_to_full_min % 60;
+            if (h > 0) {
+                return [NSString stringWithFormat:@"~%u giờ %u phút để đầy", h, m];
+            } else {
+                return [NSString stringWithFormat:@"~%u phút để đầy", m];
+            }
+        }
+        return @"Đang tính...";
+    }
+    // Không đang sạc — hiển thị thời gian xả
+    if (_metrics.time_to_empty_min > 0 && _metrics.time_to_empty_min < 1440) {
+        uint16_t h = _metrics.time_to_empty_min / 60;
+        uint16_t m = _metrics.time_to_empty_min % 60;
+        return [NSString stringWithFormat:@"Còn ~%u giờ %u phút", h, m];
+    }
+    return _metrics.adapter_connected ? @"Bypass / Đầy" : @"Không xác định";
+}
+
 - (BOOL)isCharging {
     return _metrics.is_charging;
 }

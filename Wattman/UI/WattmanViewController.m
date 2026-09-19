@@ -25,6 +25,7 @@
 // Charger Card Value Labels
 @property (nonatomic, strong) UILabel *adapterStatusValLabel;
 @property (nonatomic, strong) UILabel *adapterTypeValLabel;
+@property (nonatomic, strong) UILabel *adapterDetailValLabel;
 @property (nonatomic, strong) UILabel *timeEstimateValLabel;
 
 @end
@@ -51,6 +52,18 @@
     [[WattmanBatteryModel sharedModel] startMonitoringWithInterval:1.0];
     
     [self updateUI];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    // Giữ màn hình sáng khi đang theo dõi pin
+    [UIApplication sharedApplication].idleTimerDisabled = YES;
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    // Cho phép màn hình tắt khi rời khỏi app
+    [UIApplication sharedApplication].idleTimerDisabled = NO;
 }
 
 - (void)setupScrollView {
@@ -215,8 +228,12 @@
     _adapterTypeValLabel = [[UILabel alloc] init];
     [card addRowWithLabel:@"Chế độ nhận diện" valueLabel:_adapterTypeValLabel];
     
+    _adapterDetailValLabel = [[UILabel alloc] init];
+    _adapterDetailValLabel.numberOfLines = 2;
+    [card addRowWithLabel:@"Thông số củ sạc" valueLabel:_adapterDetailValLabel];
+    
     _timeEstimateValLabel = [[UILabel alloc] init];
-    [card addRowWithLabel:@"Thời gian pin còn lại" valueLabel:_timeEstimateValLabel];
+    [card addRowWithLabel:@"Thời gian" valueLabel:_timeEstimateValLabel];
     
     [_contentStackView addArrangedSubview:card];
 }
@@ -260,16 +277,12 @@
     
     // 3. Charger Card
     self.adapterStatusValLabel.text = m.adapter_connected ? @"Đã kết nối A/C" : @"Không cắm";
-    if (m.adapter_desc[0] != '\0') {
-        self.adapterTypeValLabel.text = [NSString stringWithFormat:@"%s (%@)", m.adapter_desc, model.sourceTypeString];
-    } else {
-        self.adapterTypeValLabel.text = model.sourceTypeString;
-    }
-    if (m.time_to_empty_min > 0 && m.time_to_empty_min < 1440) {
-        self.timeEstimateValLabel.text = [NSString stringWithFormat:@"~%u giờ %u phút", m.time_to_empty_min / 60, m.time_to_empty_min % 60];
-    } else {
-        self.timeEstimateValLabel.text = m.is_charging ? @"Đang sạc..." : @"Không xác định";
-    }
+    // Chế độ nhận diện = nguồn dữ liệu
+    self.adapterTypeValLabel.text = model.sourceTypeString;
+    // Thông số chi tiết củ sạc
+    self.adapterDetailValLabel.text = model.adapterDetailString;
+    // Thời gian: sạc đầy / pin còn lại / bypass
+    self.timeEstimateValLabel.text = model.timeToFullString;
 }
 
 #pragma mark - WattmanBatteryModelDelegate

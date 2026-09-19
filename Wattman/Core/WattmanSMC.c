@@ -345,9 +345,36 @@ static bool read_from_iopm_powersource(WattmanMetrics *metrics) {
     int adapter_watts = 0;
     if (adapterDetails) {
         adapter_watts = cf_get_int(adapterDetails, CFSTR("Watts"), 0);
-        char ad_name[64] = {0};
-        if (cf_get_string(adapterDetails, CFSTR("Name"), ad_name, sizeof(ad_name))) {
-            snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc), "%s (%dW)", ad_name, adapter_watts);
+        metrics->adapter_watts = (uint16_t)(adapter_watts > 0 ? adapter_watts : 0);
+        
+        // Điện áp và dòng điện ngõ ra củ sạc
+        int ad_volt = cf_get_int(adapterDetails, CFSTR("Voltage"), 0);
+        int ad_curr = cf_get_int(adapterDetails, CFSTR("Current"), 0);
+        // Một số thiết bị trả về mV, một số trả về V — chuẩn hoá sang mV
+        if (ad_volt > 0 && ad_volt < 30) {
+            ad_volt = ad_volt * 1000; // V → mV
+        }
+        metrics->adapter_voltage_mv = (uint16_t)(ad_volt > 0 ? ad_volt : 0);
+        metrics->adapter_current_ma = ad_curr; // mA
+        
+        // Tên và nhà sản xuất củ sạc
+        cf_get_string(adapterDetails, CFSTR("Name"), metrics->adapter_name, sizeof(metrics->adapter_name));
+        cf_get_string(adapterDetails, CFSTR("Manufacturer"), metrics->adapter_manufacturer, sizeof(metrics->adapter_manufacturer));
+        
+        // Xây dựng chuỗi mô tả
+        if (metrics->adapter_name[0] != '\0') {
+            if (ad_volt > 0 && ad_curr > 0) {
+                float volt_v = (float)ad_volt / 1000.0f;
+                float curr_a = fabsf((float)ad_curr) / 1000.0f;
+                snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc),
+                         "%s — %.1fV / %.2fA", metrics->adapter_name, volt_v, curr_a);
+            } else if (adapter_watts > 0) {
+                snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc),
+                         "%s (%dW)", metrics->adapter_name, adapter_watts);
+            } else {
+                snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc),
+                         "%s", metrics->adapter_name);
+            }
         }
     }
     
@@ -373,6 +400,22 @@ static bool read_from_iopm_powersource(WattmanMetrics *metrics) {
         tte = cf_get_int(props, CFSTR("AvgTimeToEmpty"), 0);
     }
     metrics->time_to_empty_min = (uint16_t)tte;
+    
+    // 11. Ước tính thời gian sạc đầy
+    // Thử đọc từ IOKit trước (có thể thiết bị đã tính sẵn)
+    int ttf = cf_get_int(props, CFSTR("AvgTimeToFull"), 0);
+    if (ttf <= 0) {
+        ttf = cf_get_int(props, CFSTR("InstantTimeToFull"), 0);
+    }
+    // Nếu IOKit không có, tự tính từ dung lượng và dòng sạc
+    if (ttf <= 0 && metrics->is_charging && metrics->current_ma > 30) {
+        int deficit = (int)metrics->full_charge_cap_mah - (int)metrics->remaining_cap_mah;
+        if (deficit > 0 && metrics->current_ma > 0) {
+            ttf = (int)(((float)deficit / (float)metrics->current_ma) * 60.0f);
+        }
+    }
+    // Giới hạn hợp lý: 0–600 phút (10 giờ)
+    metrics->time_to_full_min = (ttf > 0 && ttf < 600) ? (uint16_t)ttf : 0;
     
     CFRelease(props);
     return true;

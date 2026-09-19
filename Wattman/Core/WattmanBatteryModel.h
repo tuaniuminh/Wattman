@@ -24,6 +24,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) NSString *stateOfChargeString;     // e.g. "74%"
 @property (nonatomic, readonly) NSString *statusBadgeString;      // e.g. "⚡ Sạc nhanh USB-PD"
 @property (nonatomic, readonly) NSString *sourceTypeString;       // e.g. "IOKit (IOPMPowerSource)"
+@property (nonatomic, readonly) NSString *adapterDetailString;    // e.g. "Apple 20W USB-C — 9.0V / 2.22A"
+@property (nonatomic, readonly) NSString *timeToFullString;       // e.g. "~1 giờ 12 phút để đầy"
 @property (nonatomic, readonly) BOOL isCharging;
 
 + (instancetype)sharedModel;

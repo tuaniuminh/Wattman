@@ -64,7 +64,9 @@ $(APP_DIR)/Wattman: $(OBJS)
 	@echo "[*] Linking Wattman binary..."
 	@mkdir -p $(APP_DIR)
 	@cp Info.plist $(APP_DIR)/Info.plist
-	@if [ -f Resources/AppIcon.jpg ]; then cp Resources/AppIcon.jpg $(APP_DIR)/AppIcon.jpg; fi
+	@for icon in Resources/AppIcon*.png; do \
+	  [ -f "$$icon" ] && cp "$$icon" "$(APP_DIR)/$$(basename $$icon)" || true; \
+	done
 	$(CC) $(OBJS) $(LDFLAGS) -o $(APP_DIR)/Wattman
 	@echo "[*] Signing with TrollStore entitlements..."
 	$(LDID) -SWattman.entitlements $(APP_DIR)/Wattman
