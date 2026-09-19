@@ -3,10 +3,14 @@ import Foundation
 
 /// Bridge class cho phép Objective-C gọi ActivityKit
 /// Tự động bắt đầu / cập nhật / kết thúc Live Activity khi trạng thái sạc thay đổi
+///
+/// NOTE: ActivityContent API (activity.content, end(_:dismissalPolicy:)) yêu cầu iOS 16.2+
+/// Devices chạy iOS < 16.2 sẽ không có Live Activity (graceful fallback, không crash)
 @objc public class WattmanActivityManager: NSObject {
 
     @objc public static let shared = WattmanActivityManager()
 
+    @available(iOS 16.2, *)
     private var currentActivity: Activity<WattmanAttributes>?
 
     private override init() {
@@ -15,7 +19,7 @@ import Foundation
 
     // MARK: - Public ObjC API
 
-    /// Bắt đầu Live Activity khi cắm sạc
+    /// Bắt đầu hoặc cập nhật Live Activity khi cắm sạc
     @objc public func startActivity(
         watts: Float,
         currentMa: Int,
@@ -25,11 +29,8 @@ import Foundation
         timeToFullMin: Int,
         statusText: String
     ) {
-        guard #available(iOS 16.1, *) else { return }
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            NSLog("[Wattman] Live Activities not enabled on this device")
-            return
-        }
+        guard #available(iOS 16.2, *) else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         // Nếu đã có activity đang chạy thì update thay vì tạo mới
         if currentActivity != nil {
@@ -57,7 +58,7 @@ import Foundation
 
         let content = ActivityContent(
             state: state,
-            staleDate: Date().addingTimeInterval(60) // stale sau 60 giây không update
+            staleDate: Date().addingTimeInterval(60)
         )
 
         do {
@@ -83,7 +84,7 @@ import Foundation
         timeToFullMin: Int,
         statusText: String
     ) {
-        guard #available(iOS 16.1, *) else { return }
+        guard #available(iOS 16.2, *) else { return }
         guard let activity = currentActivity else { return }
 
         let state = WattmanAttributes.ContentState(
@@ -108,9 +109,9 @@ import Foundation
 
     /// Kết thúc Live Activity (khi rút sạc)
     @objc public func endActivity() {
-        guard #available(iOS 16.1, *) else { return }
+        guard #available(iOS 16.2, *) else { return }
         guard let activity = currentActivity else { return }
-        // Dùng content hiện tại làm final state để tránh nil ambiguous
+        // Dùng content hiện tại làm final state (iOS 16.2 API)
         let finalContent = activity.content
         Task {
             await activity.end(finalContent, dismissalPolicy: .immediate)
@@ -119,9 +120,9 @@ import Foundation
         currentActivity = nil
     }
 
-    /// Kiểm tra Live Activities có khả dụng không
+    /// Kiểm tra Live Activities có khả dụng không (iOS 16.2+)
     @objc public var isAvailable: Bool {
-        if #available(iOS 16.1, *) {
+        if #available(iOS 16.2, *) {
             return ActivityAuthorizationInfo().areActivitiesEnabled
         }
         return false

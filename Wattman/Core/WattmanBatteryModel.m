@@ -74,7 +74,7 @@
             }
             
 #if WATTMAN_HAS_ACTIVITY_MANAGER
-            // Cập nhật hoặc bắt đầu Live Activity
+            // Cập nhật hoặc bắt đầu Live Activity (iOS 16.2+ only, graceful fallback on older)
             WattmanActivityManager *mgr = [WattmanActivityManager shared];
             if (mgr.isAvailable) {
                 // Tạo status text
