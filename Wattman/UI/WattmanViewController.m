@@ -57,6 +57,8 @@
     _scrollView = [[UIScrollView alloc] init];
     _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
     _scrollView.alwaysBounceVertical = YES;
+    _scrollView.showsVerticalScrollIndicator = NO;
+    _scrollView.showsHorizontalScrollIndicator = NO;
     [self.view addSubview:_scrollView];
     
     _contentStackView = [[UIStackView alloc] init];

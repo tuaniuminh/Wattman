@@ -77,19 +77,5 @@ jobs:
             Wattman/build/Wattman.ipa
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
           name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || 'Wattman v1.0.0 (TrollStore Release)' }}
-          body: |
-            ### ⚡ Wattman - Real-time Charging Wattage & Battery Monitor for TrollStore
-            
-            Bản xuất bản chính thức của **Wattman** dành cho thiết bị cài đặt qua **TrollStore** (hoặc Jailbreak).
-            
-            #### 📦 Tải về cài đặt:
-            - [**Wattman.tipa**](https://github.com/${{ github.repository }}/releases/download/${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}/Wattman.tipa): Mở trực tiếp bằng TrollStore.
-            - [**Wattman.ipa**](https://github.com/${{ github.repository }}/releases/download/${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}/Wattman.ipa): File IPA đầy đủ.
-            
-            #### ✨ Tính năng nổi bật:
-            - **Đo công suất sạc thời gian thực (Watts)** theo công thức $P = U \times I$.
-            - **Nhận diện sạc nhanh**: Tự động phát hiện củ sạc USB-PD, cắm sạc thường hoặc đang xả pin.
-            - **Đo đạc chỉ số pin sâu**: Đọc điện áp (mV), dòng sạc (mA), nhiệt độ cell pin (°C).
-            - **Kiểm tra độ chai pin**: % Sức khỏe pin (Battery Health), dung lượng thực tế FCC và số chu kỳ sạc (Cycle count).
           draft: false
           prerelease: false
