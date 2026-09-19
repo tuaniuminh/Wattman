@@ -1,8 +1,10 @@
-name: Build Wattman (TrollStore IPA/TIPA)
+name: Build and Release Wattman
 
 on:
   push:
     branches: [ main, master ]
+    tags:
+      - 'v*'
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -11,19 +13,20 @@ permissions:
   contents: write
 
 jobs:
-  build-ipa:
+  build-and-release:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install build tools
         run: |
           sudo apt-get update
           sudo apt-get install -y curl xz-utils zip make ca-certificates
 
       - name: Setup iOS SDK and LLVM Toolchain
         run: |
+          set -e
           mkdir -p $HOME/theos/sdks $HOME/theos/toolchain
           
           # Download iOS 13.7 SDK
@@ -46,8 +49,12 @@ jobs:
 
       - name: Build Wattman IPA & TIPA
         run: |
-          export PATH="$HOME/theos/toolchain/linux/iphone/bin:$PATH"
+          set -e
           export THEOS="$HOME/theos"
+          export PATH="$THEOS/toolchain/linux/iphone/bin:$PATH"
+          
+          echo "[*] Compiler version:"
+          $THEOS/toolchain/linux/iphone/bin/clang --version
           
           make -C Wattman all
 
@@ -61,13 +68,28 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create GitHub Release (Optional on tags)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           files: |
             Wattman/build/Wattman.tipa
             Wattman/build/Wattman.ipa
-          name: Release ${{ github.ref_name }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || 'Wattman v1.0.0 (TrollStore Release)' }}
+          body: |
+            ### ⚡ Wattman - Real-time Charging Wattage & Battery Monitor for TrollStore
+            
+            Bản xuất bản chính thức của **Wattman** dành cho thiết bị cài đặt qua **TrollStore** (hoặc Jailbreak).
+            
+            #### 📦 Tải về cài đặt:
+            - [**Wattman.tipa**](https://github.com/${{ github.repository }}/releases/download/${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}/Wattman.tipa): Mở trực tiếp bằng TrollStore.
+            - [**Wattman.ipa**](https://github.com/${{ github.repository }}/releases/download/${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}/Wattman.ipa): File IPA đầy đủ.
+            
+            #### ✨ Tính năng nổi bật:
+            - **Đo công suất sạc thời gian thực (Watts)** theo công thức $P = U \times I$.
+            - **Nhận diện sạc nhanh**: Tự động phát hiện củ sạc USB-PD, cắm sạc thường hoặc đang xả pin.
+            - **Đo đạc chỉ số pin sâu**: Đọc điện áp (mV), dòng sạc (mA), nhiệt độ cell pin (°C).
+            - **Kiểm tra độ chai pin**: % Sức khỏe pin (Battery Health), dung lượng thực tế FCC và số chu kỳ sạc (Cycle count).
           draft: false
           prerelease: false
