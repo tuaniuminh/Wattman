@@ -83,10 +83,11 @@ jobs:
             -emit-module \
             -emit-module-path "$OBJ_DIR/Wattman.swiftmodule" \
             -parse-as-library \
-            -Onone \
+            -wmo \
+            -c \
             WattmanWidget/WattmanAttributes.swift \
             Wattman/Core/WattmanActivityManager.swift \
-            -c -o "$OBJ_DIR/WattmanActivityManager.o"
+            -o "$OBJ_DIR/WattmanBridge.o"
           echo "[+] Swift bridge compiled → $OBJ_DIR/Wattman-Swift.h"
 
           # ─────────────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ jobs:
             -framework CoreFoundation \
             -framework IOKit \
             -framework ActivityKit \
-            "$OBJ_DIR/WattmanActivityManager.o" \
+            "$OBJ_DIR/WattmanBridge.o" \
             "$OBJ_DIR/main.o" \
             "$OBJ_DIR/AppDelegate.o" \
             "$OBJ_DIR/WattmanSMC.o" \
