@@ -1,0 +1,73 @@
+name: Build Wattman (TrollStore IPA/TIPA)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ipa:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl xz-utils zip make ca-certificates
+
+      - name: Setup iOS SDK and LLVM Toolchain
+        run: |
+          mkdir -p $HOME/theos/sdks $HOME/theos/toolchain
+          
+          # Download iOS 13.7 SDK
+          echo "[*] Downloading iPhoneOS13.7 SDK..."
+          curl -sL https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS13.7.sdk.tar.xz -o sdk.tar.xz
+          tar -xf sdk.tar.xz -C $HOME/theos/sdks
+          rm sdk.tar.xz
+
+          # Download iOS Cross-Toolchain (Clang + ldid)
+          echo "[*] Downloading iOS toolchain..."
+          curl -sL https://github.com/L1ghtmann/llvm-project/releases/download/main-update_3-eabca92/iOSToolchain-x86_64.tar.xz -o toolchain.tar.xz
+          tar -xf toolchain.tar.xz -C $HOME/theos/toolchain
+          rm toolchain.tar.xz
+
+          # Fix CGColor header compatibility in older SDKs if needed
+          header="$HOME/theos/sdks/iPhoneOS13.7.sdk/System/Library/Frameworks/CoreGraphics.framework/Headers/CGColor.h"
+          if [ -f "$header" ]; then
+            sed -i 's/) CG_UNAVAILABLE_EMBEDDED/, 2.0)/g' "$header" || true
+          fi
+
+      - name: Build Wattman IPA & TIPA
+        run: |
+          export PATH="$HOME/theos/toolchain/linux/iphone/bin:$PATH"
+          export THEOS="$HOME/theos"
+          
+          make -C Wattman all
+
+      - name: Upload Build Artifacts (.ipa and .tipa)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wattman-TrollStore
+          path: |
+            Wattman/build/Wattman.tipa
+            Wattman/build/Wattman.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release (Optional on tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Wattman/build/Wattman.tipa
+            Wattman/build/Wattman.ipa
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false

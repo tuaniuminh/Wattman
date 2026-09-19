@@ -1,0 +1,22 @@
+# Build outputs
+build/
+Payload/
+*.ipa
+*.tipa
+*.deb
+*.o
+*.dylib
+*.a
+
+# OS & IDE
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# Logs
+*.log
