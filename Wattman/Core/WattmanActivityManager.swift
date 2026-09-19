@@ -10,8 +10,14 @@ import Foundation
 
     @objc public static let shared = WattmanActivityManager()
 
+    // Backing store dùng Any? vì Swift không cho @available trên stored property
+    private var _currentActivityBox: Any? = nil
+
     @available(iOS 16.2, *)
-    private var currentActivity: Activity<WattmanAttributes>?
+    private var currentActivity: Activity<WattmanAttributes>? {
+        get { return _currentActivityBox as? Activity<WattmanAttributes> }
+        set { _currentActivityBox = newValue }
+    }
 
     private override init() {
         super.init()
