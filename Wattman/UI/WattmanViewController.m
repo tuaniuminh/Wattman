@@ -258,7 +258,11 @@
     
     // 3. Charger Card
     self.adapterStatusValLabel.text = m.adapter_connected ? @"Đã kết nối A/C" : @"Không cắm";
-    self.adapterTypeValLabel.text = [NSString stringWithUTF8String:m.adapter_desc];
+    if (m.adapter_desc[0] != '\0') {
+        self.adapterTypeValLabel.text = [NSString stringWithFormat:@"%s (%@)", m.adapter_desc, model.sourceTypeString];
+    } else {
+        self.adapterTypeValLabel.text = model.sourceTypeString;
+    }
     if (m.time_to_empty_min > 0 && m.time_to_empty_min < 1440) {
         self.timeEstimateValLabel.text = [NSString stringWithFormat:@"~%u giờ %u phút", m.time_to_empty_min / 60, m.time_to_empty_min % 60];
     } else {

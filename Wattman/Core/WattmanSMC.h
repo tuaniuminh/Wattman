@@ -38,15 +38,16 @@ typedef struct {
     bool     is_charging;       // Thiết bị đang nhận sạc
     bool     adapter_connected; // Có cắm củ sạc / cáp
     char     adapter_desc[64];  // Mô tả nguồn sạc (USB-PD, Apple Adapter, MagSafe, etc.)
+    char     source_type[64];   // Nguồn dữ liệu (IOPMPowerSource / AppleSMC)
 } WattmanMetrics;
 
-// Khởi tạo và kiểm tra kết nối với AppleSMC
+// Khởi tạo và kiểm tra kết nối phần cứng
 bool wattman_smc_init(void);
 
 // Đọc toàn bộ snapshot thông số pin thời gian thực
 bool wattman_smc_read_metrics(WattmanMetrics *metrics);
 
-// Đóng kết nối AppleSMC
+// Đóng kết nối phần cứng
 void wattman_smc_close(void);
 
 #ifdef __cplusplus

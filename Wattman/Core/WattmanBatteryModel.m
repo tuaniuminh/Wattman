@@ -92,18 +92,30 @@
 }
 
 - (NSString *)temperatureString {
+    if (_metrics.temperature_c <= 0.0f) {
+        return @"Đang đo...";
+    }
     return [NSString stringWithFormat:@"%.1f °C", _metrics.temperature_c];
 }
 
 - (NSString *)healthString {
+    if (_metrics.battery_health <= 0.0f) {
+        return @"Chưa xác định";
+    }
     return [NSString stringWithFormat:@"%.1f%%", _metrics.battery_health];
 }
 
 - (NSString *)capacityString {
+    if (_metrics.remaining_cap_mah == 0 && _metrics.full_charge_cap_mah == 0) {
+        return @"Đang đọc...";
+    }
     return [NSString stringWithFormat:@"%u / %u mAh", _metrics.remaining_cap_mah, _metrics.full_charge_cap_mah];
 }
 
 - (NSString *)designCapacityString {
+    if (_metrics.design_cap_mah == 0) {
+        return @"Đang đọc...";
+    }
     return [NSString stringWithFormat:@"%u mAh", _metrics.design_cap_mah];
 }
 
@@ -116,16 +128,22 @@
 }
 
 - (NSString *)statusBadgeString {
-    if (_metrics.adapter_connected) {
+    if (_metrics.current_ma > 30 || _metrics.is_charging) {
         if (_metrics.wattage >= 15.0f) {
             return @"⚡ Sạc nhanh USB-PD";
-        } else if (_metrics.is_charging) {
-            return @"🔌 Đang sạc nguồn";
-        } else {
-            return @"🛑 Đã cắm sạc (Bypass)";
         }
+        return @"🔌 Đang nhận sạc";
+    } else if (_metrics.adapter_connected) {
+        return @"🛑 Cắm sạc (Bypass/Đầy)";
     }
     return @"🔋 Đang dùng pin";
+}
+
+- (NSString *)sourceTypeString {
+    if (strlen(_metrics.source_type) > 0) {
+        return [NSString stringWithUTF8String:_metrics.source_type];
+    }
+    return @"IOKit (Phần cứng)";
 }
 
 - (BOOL)isCharging {

@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <arpa/inet.h>
 
 #if __has_include(<mach/mach.h>)
 #include <mach/mach.h>
@@ -18,51 +17,39 @@ extern mach_port_t mach_task_self_;
 typedef mach_port_t io_object_t;
 typedef io_object_t io_service_t;
 typedef io_object_t io_connect_t;
+typedef io_object_t io_registry_entry_t;
 typedef int IOReturn;
 typedef int kern_return_t;
 
 #define kIOReturnSuccess 0
 #define IO_OBJECT_NULL ((io_object_t)0)
 
-extern IOReturn IOMasterPort(mach_port_t, mach_port_t *);
 extern CFMutableDictionaryRef IOServiceMatching(const char *);
 extern io_service_t IOServiceGetMatchingService(mach_port_t, CFDictionaryRef);
 extern kern_return_t IOServiceOpen(io_service_t, mach_port_t, uint32_t, io_connect_t *);
 extern kern_return_t IOServiceClose(io_connect_t);
 extern kern_return_t IOConnectCallStructMethod(mach_port_t, uint32_t, const void *, size_t, void *, size_t *);
+extern kern_return_t IORegistryEntryCreateCFProperties(io_registry_entry_t, CFMutableDictionaryRef *, CFAllocatorRef, uint32_t);
 extern kern_return_t IOObjectRelease(io_object_t);
+
+// IOPowerSources API (IOKit)
+extern CFTypeRef IOPSCopyPowerSourcesInfo(void);
+extern CFArrayRef IOPSCopyPowerSourcesList(CFTypeRef blob);
+extern CFDictionaryRef IOPSGetPowerSourceDescription(CFTypeRef blob, CFTypeRef ps);
 
 // SMC Definitions
 typedef uint32_t SMCKey;
-typedef uint32_t SMCDataType;
-typedef uint8_t SMCDataAttributes;
-
-typedef struct {
-    unsigned char major;
-    unsigned char minor;
-    unsigned char build;
-    unsigned short release;
-} SMCVersion;
-
-typedef struct {
-    uint16_t version;
-    uint16_t length;
-    uint32_t cpuPLimit;
-    uint32_t gpuPLimit;
-    uint32_t memPLimit;
-} SMCPLimitData;
-
 typedef struct {
     uint32_t dataSize;
-    SMCDataType dataType;
-    SMCDataAttributes dataAttributes;
+    uint32_t dataType;
+    uint8_t dataAttributes;
 } SMCKeyInfoData;
 
 typedef struct {
     SMCKey key;
     struct {
-        SMCVersion vers;
-        SMCPLimitData pLimitData;
+        unsigned char vers[6];
+        uint16_t pLimitData[8];
         SMCKeyInfoData keyInfo;
         uint8_t result;
         uint8_t status;
@@ -80,7 +67,61 @@ static io_connect_t gSMCConnection = IO_OBJECT_NULL;
 static bool gSMCInitialized = false;
 static bool gHasSMC = false;
 
-// Gọi lệnh struct method tới SMC Driver
+#pragma mark - Helper Functions
+
+static int cf_get_int(CFDictionaryRef dict, CFStringRef key, int default_val) {
+    if (!dict) return default_val;
+    CFTypeRef val = CFDictionaryGetValue(dict, key);
+    if (!val) return default_val;
+    if (CFGetTypeID(val) == CFNumberGetTypeID()) {
+        int num = 0;
+        if (CFNumberGetValue((CFNumberRef)val, kCFNumberIntType, &num)) {
+            return num;
+        }
+    }
+    return default_val;
+}
+
+static int64_t cf_get_int64(CFDictionaryRef dict, CFStringRef key, int64_t default_val) {
+    if (!dict) return default_val;
+    CFTypeRef val = CFDictionaryGetValue(dict, key);
+    if (!val) return default_val;
+    if (CFGetTypeID(val) == CFNumberGetTypeID()) {
+        int64_t num = 0;
+        if (CFNumberGetValue((CFNumberRef)val, kCFNumberSInt64Type, &num)) {
+            return num;
+        }
+    }
+    return default_val;
+}
+
+static bool cf_get_bool(CFDictionaryRef dict, CFStringRef key, bool default_val) {
+    if (!dict) return default_val;
+    CFTypeRef val = CFDictionaryGetValue(dict, key);
+    if (!val) return default_val;
+    if (CFGetTypeID(val) == CFBooleanGetTypeID()) {
+        return CFBooleanGetValue((CFBooleanRef)val);
+    }
+    if (CFGetTypeID(val) == CFNumberGetTypeID()) {
+        int num = 0;
+        CFNumberGetValue((CFNumberRef)val, kCFNumberIntType, &num);
+        return num != 0;
+    }
+    return default_val;
+}
+
+static bool cf_get_string(CFDictionaryRef dict, CFStringRef key, char *buf, size_t buf_len) {
+    if (!dict || !buf || buf_len == 0) return false;
+    CFTypeRef val = CFDictionaryGetValue(dict, key);
+    if (!val) return false;
+    if (CFGetTypeID(val) == CFStringGetTypeID()) {
+        return CFStringGetCString((CFStringRef)val, buf, (CFIndex)buf_len, kCFStringEncodingUTF8);
+    }
+    return false;
+}
+
+#pragma mark - AppleSMC Low Level
+
 static IOReturn smc_call(int index, SMCParamStruct *input, SMCParamStruct *output) {
     if (gSMCConnection == IO_OBJECT_NULL) return -1;
     size_t inSize = sizeof(SMCParamStruct);
@@ -88,72 +129,50 @@ static IOReturn smc_call(int index, SMCParamStruct *input, SMCParamStruct *outpu
     return IOConnectCallStructMethod(gSMCConnection, index, input, inSize, output, &outSize);
 }
 
-// Lấy thông tin kích thước và kiểu dữ liệu của key
-static IOReturn smc_get_key_info(SMCKey key, SMCKeyInfoData *keyInfo) {
+static IOReturn smc_read_key(SMCKey key, void *buffer, size_t buffer_size) {
+    if (!gHasSMC || gSMCConnection == IO_OBJECT_NULL) return -1;
+    
     SMCParamStruct input = {0};
     SMCParamStruct output = {0};
     input.key = key;
     input.param.data8 = kSMCGetKeyInfo;
     
     IOReturn ret = smc_call(kSMCHandleYPCEvent, &input, &output);
-    if (ret == kIOReturnSuccess && output.param.keyInfo.dataSize > 0) {
-        *keyInfo = output.param.keyInfo;
-        return kIOReturnSuccess;
-    }
-    return -1;
-}
-
-// Đọc giá trị an toàn từ một SMC Key
-static IOReturn smc_read_key(SMCKey key, void *buffer, size_t buffer_size) {
-    SMCKeyInfoData keyInfo = {0};
-    if (smc_get_key_info(key, &keyInfo) != kIOReturnSuccess) {
+    if (ret != kIOReturnSuccess || output.param.keyInfo.dataSize == 0) {
         return -1;
     }
     
-    SMCParamStruct input = {0};
-    SMCParamStruct output = {0};
-    input.key = key;
     input.param.data8 = kSMCReadKey;
-    input.param.keyInfo = keyInfo;
+    input.param.keyInfo = output.param.keyInfo;
     
-    IOReturn ret = smc_call(kSMCHandleYPCEvent, &input, &output);
+    ret = smc_call(kSMCHandleYPCEvent, &input, &output);
     if (ret == kIOReturnSuccess) {
-        size_t copy_size = keyInfo.dataSize < buffer_size ? keyInfo.dataSize : buffer_size;
+        size_t copy_size = output.param.keyInfo.dataSize < buffer_size ? output.param.keyInfo.dataSize : buffer_size;
         memcpy(buffer, output.param.bytes, copy_size);
         return kIOReturnSuccess;
     }
     return ret;
 }
 
-// Khởi tạo kết nối tới AppleSMC service
+#pragma mark - Initialization
+
 bool wattman_smc_init(void) {
     if (gSMCInitialized) return gHasSMC;
-    
-    mach_port_t masterPort = MACH_PORT_NULL;
-    if (IOMasterPort(MACH_PORT_NULL, &masterPort) != kIOReturnSuccess) {
-        gSMCInitialized = true;
-        gHasSMC = false;
-        return false;
-    }
-    
-    io_service_t service = IOServiceGetMatchingService(masterPort, IOServiceMatching("AppleSMC"));
-    if (service == IO_OBJECT_NULL) {
-        gSMCInitialized = true;
-        gHasSMC = false;
-        return false;
-    }
-    
-    kern_return_t ret = IOServiceOpen(service, mach_task_self(), 0, &gSMCConnection);
-    IOObjectRelease(service);
-    
-    if (ret == kIOReturnSuccess && gSMCConnection != IO_OBJECT_NULL) {
-        gHasSMC = true;
-    } else {
-        gHasSMC = false;
-    }
-    
     gSMCInitialized = true;
-    return gHasSMC;
+    
+    // Truy cập trực tiếp cổng chính (0 / kIOMainPortDefault) mà không qua IOMasterPort
+    io_service_t service = IOServiceGetMatchingService(0, IOServiceMatching("AppleSMC"));
+    if (service != IO_OBJECT_NULL) {
+        kern_return_t ret = IOServiceOpen(service, mach_task_self(), 0, &gSMCConnection);
+        IOObjectRelease(service);
+        if (ret == kIOReturnSuccess && gSMCConnection != IO_OBJECT_NULL) {
+            gHasSMC = true;
+            return true;
+        }
+    }
+    
+    gHasSMC = false;
+    return false;
 }
 
 void wattman_smc_close(void) {
@@ -165,102 +184,279 @@ void wattman_smc_close(void) {
     gHasSMC = false;
 }
 
-// Đọc toàn bộ snapshot dữ liệu từ SMC
+#pragma mark - Core Metric Extraction
+
+// Đọc dữ liệu pin từ IOPMPowerSource và AppleSmartBattery
+static bool read_from_iopm_powersource(WattmanMetrics *metrics) {
+    if (!metrics) return false;
+    
+    // Tìm kiếm các service quản lý nguồn pin trong IOKit
+    io_service_t service = IOServiceGetMatchingService(0, IOServiceMatching("IOPMPowerSource"));
+    if (service == IO_OBJECT_NULL) {
+        service = IOServiceGetMatchingService(0, IOServiceMatching("AppleSmartBattery"));
+    }
+    if (service == IO_OBJECT_NULL) {
+        service = IOServiceGetMatchingService(0, IOServiceMatching("AppleARMIODevice"));
+    }
+    
+    CFMutableDictionaryRef props = NULL;
+    if (service != IO_OBJECT_NULL) {
+        IORegistryEntryCreateCFProperties(service, &props, kCFAllocatorDefault, 0);
+        IOObjectRelease(service);
+    }
+    
+    // Nếu IORegistry không mở được, thử qua IOPSCopyPowerSourcesInfo
+    if (!props) {
+        CFTypeRef psInfo = IOPSCopyPowerSourcesInfo();
+        if (psInfo) {
+            CFArrayRef psList = IOPSCopyPowerSourcesList(psInfo);
+            if (psList && CFArrayGetCount(psList) > 0) {
+                CFDictionaryRef desc = IOPSGetPowerSourceDescription(psInfo, CFArrayGetValueAtIndex(psList, 0));
+                if (desc) {
+                    props = (CFMutableDictionaryRef)CFDictionaryCreateCopy(kCFAllocatorDefault, desc);
+                }
+            }
+            if (psList) CFRelease(psList);
+            CFRelease(psInfo);
+        }
+    }
+    
+    if (!props) {
+        return false;
+    }
+    
+    // 1. Kiểm tra sub-dictionary BatteryData (chứa thông tin sâu của pin)
+    CFDictionaryRef batteryData = (CFDictionaryRef)CFDictionaryGetValue(props, CFSTR("BatteryData"));
+    CFDictionaryRef batteryFCCData = (CFDictionaryRef)CFDictionaryGetValue(props, CFSTR("BatteryFCCData"));
+    
+    // 2. Điện áp (Voltage) - đơn vị mV
+    int volt = 0;
+    if (batteryData) {
+        volt = cf_get_int(batteryData, CFSTR("Voltage"), 0);
+    }
+    if (volt <= 0) {
+        volt = cf_get_int(props, CFSTR("Voltage"), 0);
+    }
+    metrics->voltage_mv = (uint16_t)volt;
+    
+    // 3. Dòng điện (Amperage / Current) - đơn vị mA (signed: dương là sạc, âm là xả)
+    int current = 0;
+    current = cf_get_int(props, CFSTR("InstantAmperage"), 0);
+    if (current == 0) {
+        current = cf_get_int(props, CFSTR("Amperage"), 0);
+    }
+    if (current == 0 && batteryData) {
+        current = cf_get_int(batteryData, CFSTR("InstantAmperage"), 0);
+        if (current == 0) {
+            current = cf_get_int(batteryData, CFSTR("Amperage"), 0);
+        }
+    }
+    metrics->current_ma = (int16_t)current;
+    
+    // 4. Mức pin (State of Charge %)
+    int soc = 0;
+    soc = cf_get_int(props, CFSTR("CurrentCapacity"), 0);
+    if (soc <= 0 && batteryData) {
+        soc = cf_get_int(batteryData, CFSTR("StateOfCharge"), 0);
+    }
+    metrics->state_of_charge = (uint16_t)soc;
+    
+    // 5. Dung lượng pin (mAh)
+    // AppleRawCurrentCapacity / AppleRawMaxCapacity / DesignCapacity
+    int remain_cap = cf_get_int(props, CFSTR("AppleRawCurrentCapacity"), 0);
+    int full_cap   = cf_get_int(props, CFSTR("AppleRawMaxCapacity"), 0);
+    int design_cap = cf_get_int(props, CFSTR("DesignCapacity"), 0);
+    
+    if (remain_cap <= 0) {
+        remain_cap = cf_get_int(props, CFSTR("AbsoluteCapacity"), 0);
+    }
+    if (full_cap <= 0) {
+        full_cap = cf_get_int(props, CFSTR("NominalChargeCapacity"), 0);
+    }
+    if (full_cap <= 0) {
+        full_cap = cf_get_int(props, CFSTR("MaxCapacity"), 0);
+    }
+    if (design_cap <= 0 && batteryData) {
+        design_cap = cf_get_int(batteryData, CFSTR("DesignCapacity"), 0);
+    }
+    
+    metrics->remaining_cap_mah = (uint16_t)remain_cap;
+    metrics->full_charge_cap_mah = (uint16_t)full_cap;
+    metrics->design_cap_mah = (uint16_t)design_cap;
+    
+    // Qmax (Dung lượng hóa học tối đa)
+    int qmax = 0;
+    if (batteryData) {
+        CFTypeRef qVal = CFDictionaryGetValue(batteryData, CFSTR("Qmax"));
+        if (qVal && CFGetTypeID(qVal) == CFArrayGetTypeID() && CFArrayGetCount((CFArrayRef)qVal) > 0) {
+            CFNumberRef qNum = (CFNumberRef)CFArrayGetValueAtIndex((CFArrayRef)qVal, 0);
+            if (qNum && CFGetTypeID(qNum) == CFNumberGetTypeID()) {
+                CFNumberGetValue(qNum, kCFNumberIntType, &qmax);
+            }
+        }
+        if (qmax <= 0) {
+            qmax = cf_get_int(batteryData, CFSTR("QmaxCell0"), 0);
+        }
+    }
+    metrics->qmax_mah = (uint16_t)qmax;
+    
+    // Tính % sức khỏe pin (Battery Health)
+    if (design_cap > 0 && full_cap > 0) {
+        metrics->battery_health = ((float)full_cap / (float)design_cap) * 100.0f;
+    }
+    
+    // 6. Số chu kỳ sạc (Cycle Count)
+    int cycles = 0;
+    if (batteryData) {
+        cycles = cf_get_int(batteryData, CFSTR("CycleCount"), 0);
+    }
+    if (cycles <= 0) {
+        cycles = cf_get_int(props, CFSTR("CycleCount"), 0);
+    }
+    metrics->cycle_count = (uint16_t)cycles;
+    
+    // 7. Nhiệt độ pin
+    int raw_temp = cf_get_int(props, CFSTR("Temperature"), 0);
+    if (raw_temp == 0 && batteryData) {
+        raw_temp = cf_get_int(batteryData, CFSTR("Temperature"), 0);
+    }
+    if (raw_temp > 500) {
+        metrics->temperature_c = (float)raw_temp / 100.0f;
+    } else if (raw_temp > 50) {
+        metrics->temperature_c = (float)raw_temp / 10.0f;
+    } else if (raw_temp > 0) {
+        metrics->temperature_c = (float)raw_temp;
+    }
+    
+    // 8. Trạng thái cắm sạc & sạc ngoài
+    bool ext_connected = cf_get_bool(props, CFSTR("ExternalConnected"), false) ||
+                         cf_get_bool(props, CFSTR("AppleRawExternalConnected"), false);
+    bool is_chg = cf_get_bool(props, CFSTR("IsCharging"), false);
+    
+    if (current > 50) {
+        is_chg = true;
+        ext_connected = true;
+    }
+    metrics->adapter_connected = ext_connected;
+    metrics->is_charging = is_chg;
+    
+    // 9. Chi tiết củ sạc (Adapter Details)
+    CFDictionaryRef adapterDetails = (CFDictionaryRef)CFDictionaryGetValue(props, CFSTR("AdapterDetails"));
+    int adapter_watts = 0;
+    if (adapterDetails) {
+        adapter_watts = cf_get_int(adapterDetails, CFSTR("Watts"), 0);
+        char ad_name[64] = {0};
+        if (cf_get_string(adapterDetails, CFSTR("Name"), ad_name, sizeof(ad_name))) {
+            snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc), "%s (%dW)", ad_name, adapter_watts);
+        }
+    }
+    
+    if (metrics->adapter_desc[0] == '\0') {
+        if (metrics->adapter_connected) {
+            if (adapter_watts > 0) {
+                snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc), "Củ sạc %dW", adapter_watts);
+            } else if (metrics->current_ma > 1500) {
+                snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc), "Sạc nhanh USB-PD");
+            } else if (metrics->is_charging) {
+                snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc), "Đang sạc qua cáp");
+            } else {
+                snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc), "Cắm sạc (Bypass / Đầy)");
+            }
+        } else {
+            snprintf(metrics->adapter_desc, sizeof(metrics->adapter_desc), "Đang dùng pin");
+        }
+    }
+    
+    // 10. Thời gian còn lại
+    int tte = cf_get_int(props, CFSTR("InstantTimeToEmpty"), 0);
+    if (tte <= 0) {
+        tte = cf_get_int(props, CFSTR("AvgTimeToEmpty"), 0);
+    }
+    metrics->time_to_empty_min = (uint16_t)tte;
+    
+    CFRelease(props);
+    return true;
+}
+
+#pragma mark - Public Interface
+
 bool wattman_smc_read_metrics(WattmanMetrics *metrics) {
     if (!metrics) return false;
     memset(metrics, 0, sizeof(WattmanMetrics));
     
-    if (!wattman_smc_init()) {
-        // Fallback mô phỏng an toàn nếu thiết bị không có SMC hoặc chạy trong Simulator
-        metrics->voltage_mv = 3850;
-        metrics->current_ma = -420;
-        metrics->power_mw = -1617;
-        metrics->wattage = 1.62f;
-        metrics->temperature_c = 28.5f;
-        metrics->remaining_cap_mah = 2800;
-        metrics->full_charge_cap_mah = 3100;
-        metrics->design_cap_mah = 3274;
-        metrics->qmax_mah = 3300;
-        metrics->state_of_charge = 90;
-        metrics->battery_health = 94.6f;
-        metrics->cycle_count = 145;
-        metrics->time_to_empty_min = 380;
-        metrics->is_charging = false;
-        metrics->adapter_connected = false;
-        strncpy(metrics->adapter_desc, "Không có SMC (Simulator/Fallback)", sizeof(metrics->adapter_desc) - 1);
-        return true;
+    // Bước 1: Đọc từ IOKit IOPMPowerSource (Hoạt động trên 100% thiết bị iOS)
+    bool iopm_ok = read_from_iopm_powersource(metrics);
+    
+    // Bước 2: Thử mở và đọc thêm từ AppleSMC (nếu thiết bị có SMC driver)
+    bool smc_active = wattman_smc_init();
+    if (smc_active) {
+        uint16_t smc_volt = 0;
+        int16_t  smc_curr = 0;
+        int16_t  smc_pwr = 0;
+        uint16_t smc_temp = 0;
+        uint16_t smc_cycles = 0;
+        uint16_t smc_fcc = 0;
+        uint16_t smc_design = 0;
+        
+        if (smc_read_key('B0AV', &smc_volt, 2) == kIOReturnSuccess && smc_volt > 0) {
+            metrics->voltage_mv = smc_volt;
+        }
+        if (smc_read_key('B0AC', &smc_curr, 2) == kIOReturnSuccess && smc_curr != 0) {
+            metrics->current_ma = smc_curr;
+        }
+        if (smc_read_key('B0AP', &smc_pwr, 2) == kIOReturnSuccess && smc_pwr != 0) {
+            metrics->power_mw = smc_pwr;
+        }
+        if (smc_read_key('B0AT', &smc_temp, 2) == kIOReturnSuccess && smc_temp > 0) {
+            metrics->temperature_c = (float)smc_temp * 0.01f;
+        }
+        if (smc_read_key('B0CT', &smc_cycles, 2) == kIOReturnSuccess && smc_cycles > 0) {
+            metrics->cycle_count = smc_cycles;
+        }
+        if (smc_read_key('B0FC', &smc_fcc, 2) == kIOReturnSuccess && smc_fcc > 0) {
+            metrics->full_charge_cap_mah = smc_fcc;
+        }
+        if (smc_read_key('B0DC', &smc_design, 2) == kIOReturnSuccess && smc_design > 0) {
+            metrics->design_cap_mah = smc_design;
+        }
+        
+        uint8_t ch_exist = 0;
+        if (smc_read_key('CHCE', &ch_exist, 1) == kIOReturnSuccess) {
+            metrics->adapter_connected = (ch_exist != 0);
+        }
     }
     
-    // 1. Điện áp trung bình (B0AV) - đơn vị mV
-    uint16_t volt = 0;
-    if (smc_read_key('B0AV', &volt, 2) == kIOReturnSuccess) {
-        metrics->voltage_mv = volt;
+    // Ghi nhận nguồn dữ liệu nhận diện
+    if (iopm_ok && smc_active) {
+        snprintf(metrics->source_type, sizeof(metrics->source_type), "IOKit & AppleSMC");
+    } else if (iopm_ok) {
+        snprintf(metrics->source_type, sizeof(metrics->source_type), "IOKit (IOPMPowerSource)");
+    } else if (smc_active) {
+        snprintf(metrics->source_type, sizeof(metrics->source_type), "AppleSMC");
+    } else {
+        snprintf(metrics->source_type, sizeof(metrics->source_type), "Chưa đọc được dữ liệu");
+        return false;
     }
     
-    // 2. Dòng điện trung bình (B0AC) - đơn vị mA (signed)
-    int16_t curr = 0;
-    if (smc_read_key('B0AC', &curr, 2) == kIOReturnSuccess) {
-        metrics->current_ma = curr;
-    }
-    
-    // 3. Công suất trung bình (B0AP) - đơn vị mW (signed)
-    int16_t pwr = 0;
-    if (smc_read_key('B0AP', &pwr, 2) == kIOReturnSuccess) {
-        metrics->power_mw = pwr;
-    } else if (metrics->voltage_mv > 0) {
-        metrics->power_mw = (int32_t)((metrics->voltage_mv * metrics->current_ma) / 1000);
-    }
-    
-    // 4. Tính công suất tức thời theo Watts: W = (V_mV * |I_mA|) / 1,000,000
+    // Bước 3: Tính toán công suất sạc tức thời (Watts)
+    // P = U * I: Điện áp (mV) * |Dòng điện (mA)| / 1,000,000
     if (metrics->voltage_mv > 0 && metrics->current_ma != 0) {
         float v = (float)metrics->voltage_mv / 1000.0f;
         float a = fabsf((float)metrics->current_ma) / 1000.0f;
         metrics->wattage = v * a;
+        metrics->power_mw = (int32_t)(((int64_t)metrics->voltage_mv * (int64_t)metrics->current_ma) / 1000);
     } else if (metrics->power_mw != 0) {
         metrics->wattage = fabsf((float)metrics->power_mw) / 1000.0f;
     } else {
         metrics->wattage = 0.0f;
     }
     
-    // 5. Nhiệt độ pin (B0AT) - đơn vị 0.01 độ C
-    uint16_t raw_temp = 0;
-    if (smc_read_key('B0AT', &raw_temp, 2) == kIOReturnSuccess) {
-        metrics->temperature_c = (float)raw_temp * 0.01f;
-    }
-    
-    // 6. Dung lượng pin (mAh)
-    smc_read_key('B0RM', &metrics->remaining_cap_mah, 2);    // Dung lượng còn lại
-    smc_read_key('B0FC', &metrics->full_charge_cap_mah, 2); // Dung lượng khi sạc đầy
-    smc_read_key('B0DC', &metrics->design_cap_mah, 2);      // Dung lượng thiết kế
-    smc_read_key('BQX1', &metrics->qmax_mah, 2);            // Qmax
-    
-    // Tính % sức khỏe pin (Battery Health)
-    if (metrics->design_cap_mah > 0 && metrics->full_charge_cap_mah > 0) {
-        metrics->battery_health = ((float)metrics->full_charge_cap_mah / (float)metrics->design_cap_mah) * 100.0f;
-        if (metrics->battery_health > 100.0f) metrics->battery_health = 100.0f;
-    }
-    
-    // 7. Tỷ lệ % pin và số chu kỳ sạc
-    smc_read_key('BRSC', &metrics->state_of_charge, 2);
-    smc_read_key('B0CT', &metrics->cycle_count, 2);
-    smc_read_key('B0TF', &metrics->time_to_empty_min, 2);
-    
-    // 8. Trạng thái củ sạc / nguồn điện
-    uint8_t ch_exist = 0;
-    smc_read_key('CHCE', &ch_exist, 1);
-    metrics->adapter_connected = (ch_exist != 0);
-    metrics->is_charging = (metrics->current_ma > 50); // Dòng nạp vào pin dương trên 50mA
-    
-    if (metrics->adapter_connected) {
-        if (metrics->wattage >= 15.0f) {
-            strncpy(metrics->adapter_desc, "Sạc nhanh USB-PD (High Power)", sizeof(metrics->adapter_desc) - 1);
-        } else if (metrics->is_charging) {
-            strncpy(metrics->adapter_desc, "Đang sạc qua cáp (Adapter Connected)", sizeof(metrics->adapter_desc) - 1);
-        } else {
-            strncpy(metrics->adapter_desc, "Đã cắm sạc (Bypass / Giữ pin)", sizeof(metrics->adapter_desc) - 1);
-        }
-    } else {
-        strncpy(metrics->adapter_desc, "Đang dùng pin (Discharging)", sizeof(metrics->adapter_desc) - 1);
+    // Cập nhật trạng thái sạc dựa trên dòng nạp thực tế
+    if (metrics->current_ma > 30) {
+        metrics->is_charging = true;
+        metrics->adapter_connected = true;
+    } else if (!metrics->adapter_connected) {
+        metrics->is_charging = false;
     }
     
     return true;
