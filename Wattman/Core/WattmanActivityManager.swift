@@ -110,9 +110,10 @@ import Foundation
     @objc public func endActivity() {
         guard #available(iOS 16.1, *) else { return }
         guard let activity = currentActivity else { return }
-
+        // Dùng content hiện tại làm final state để tránh nil ambiguous
+        let finalContent = activity.content
         Task {
-            await activity.end(nil, dismissalPolicy: .immediate)
+            await activity.end(finalContent, dismissalPolicy: .immediate)
             NSLog("[Wattman] Live Activity ended")
         }
         currentActivity = nil
